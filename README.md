@@ -5,9 +5,14 @@ Booklandi is the open-source repository for the BookLand native iOS and macOS re
 ## Credits
 
 - **Project author and owner:** Mohammad Ayati
-- **BookLand logo designer:** [Lida Samadi](https://github.com/lidasama)
+- **Contributor, logo designer and visual identity:** [Lida Samadi](https://github.com/lidasama)
 - **Created:** August 2026
 - **License:** MIT License
+
+## Contributors
+
+- **Mohammad Ayati** — project author, owner, product concept, direction, and source implementation.
+- **[Lida Samadi](https://github.com/lidasama)** — contributor, designer of the BookLand logo and logo-specific visual identity.
 
 The repository preserves the original internal app and target name `BookLand` where changing it could affect existing Xcode or Swift build configuration.
 
