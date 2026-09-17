@@ -1,6 +1,6 @@
-# Booklandi
+# Bookland
 
-Booklandi is the open-source repository for the BookLand native iOS and macOS research-reading applications.
+Bookland is the open-source repository for the BookLand native iOS and macOS research-reading applications.
 
 ## Credits
 
