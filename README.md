@@ -1,30 +1,52 @@
 # Booklandi
 
-Booklandi is the open-source repository for the BookLand PDF reading and comparison application for iOS and macOS.
+Booklandi is the open-source repository for the BookLand native iOS and macOS research-reading applications.
 
-**Author and project owner:** Mohammad Ayati  
-**Created:** August 2026  
-**License:** MIT License
+## Credits
 
-## Platforms
+- **Project author and owner:** Mohammad Ayati
+- **BookLand logo designer:** [Lida Samadi](https://github.com/lidasama)
+- **Created:** August 2026
+- **License:** MIT License
 
-- `ios/` contains the SwiftUI iPhone project and source code.
-- `macos/` contains the supplied macOS application bundle.
+The repository preserves the original internal app and target name `BookLand` where changing it could affect existing Xcode or Swift build configuration.
 
-## Project scope
+## What is included
 
-BookLand is designed as a research and study-oriented PDF library and reader. The iOS project includes PDF import, reading modes, study themes, page history, notes, highlights, full-screen reading, and side-by-side comparison workflows.
+- `ios/` — SwiftUI iPhone/iOS project, including the Xcode project and assets.
+- `macos/` — native SwiftUI/AppKit/PDFKit source and local build script for macOS.
+- `LICENSE` — MIT License under Copyright (c) 2026 Mohammad Ayati.
+- `NOTICE.md` — authorship, licensing, logo-design credit, and third-party notices.
+- `INTELLECTUAL_PROPERTY.md` — project-design and provenance record.
 
-## Authorship
+## Main capabilities
 
-The BookLand product concept, interaction direction, research-reading workflow, study features, and implementation direction in this repository are attributed to **Mohammad Ayati**.
+BookLand is designed as a local research-reading workspace for importing, organizing, reading, annotating, and comparing PDFs. The supplied projects include local library management, PDF navigation, study-oriented reading modes, notes and highlights, page history, full-screen reading, and side-by-side document comparison.
 
-The supplied project materials separately credit **Lida Samadi** for the BookLand logo artwork and logo-specific visual identity. That credit is preserved here.
+## macOS
 
-See `INTELLECTUAL_PROPERTY.md` and the platform-specific notices for details.
+The macOS source requires macOS 13 or newer and the Swift toolchain.
 
-## License
+```sh
+cd macos
+swift run
+```
 
-The software source in this repository is released under the MIT License. See `LICENSE`.
+To create a local `.app` bundle:
 
-The MIT License applies to the software code. It does not transfer ownership of third-party frameworks, imported books/PDFs, or other third-party content. Attribution notices for the BookLand concept, project authorship, and logo artwork are preserved in the repository documentation.
+```sh
+cd macos
+./make-app.sh
+```
+
+## iOS
+
+Open `ios/BookLand-iOS.xcodeproj` in Xcode, select a simulator or connected iPhone, configure your Apple development team under Signing & Capabilities, and run the project.
+
+## License and attribution
+
+The original software source in this repository is released under the [MIT License](LICENSE). The MIT License permits use, modification, distribution, sublicensing, and commercial use subject to its notice requirements.
+
+© 2026 Mohammad Ayati. The BookLand logo artwork and logo-specific visual identity are designed by **Lida Samadi**. See her GitHub profile at [github.com/lidasama](https://github.com/lidasama). This logo credit does not imply endorsement of modified forks.
+
+Third-party technologies and user-imported PDFs remain subject to their respective owners' terms and rights. See [NOTICE.md](NOTICE.md) for details.

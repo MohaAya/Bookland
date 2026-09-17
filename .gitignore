@@ -1,0 +1,31 @@
+# Swift / Xcode
+.build/
+.swiftpm/
+.quiet-build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# .NET / Windows build products
+bin/
+obj/
+publish/
+
+# macOS build products and local app bundles
+QuietLibrary.app/
+Bookland.app/
+BookLand.app/
+*.app/
+*.dSYM/
+
+# Generated release packages
+outputs/
+
+# Local user data and operating-system files
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+
+# Local Quiet Library data (the app stores PDFs and metadata here)
+QuietLibraryData/
