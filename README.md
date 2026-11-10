@@ -30,6 +30,8 @@ BookLand is designed as a local research-reading workspace for importing, organi
 
 ## macOS
 
+The Mac app has a library with covers and reading progress (grouped by reading status or topic, or one list), multi-file import and drag and drop, adding a PDF from a web link, archive and easy removal (swipe, Delete key or right-click), highlights with colours, and a Notes & Highlights page per book or for all books with Copy, Share and Save as Markdown.
+
 The macOS source requires macOS 13 or newer and the Swift toolchain.
 
 ```sh

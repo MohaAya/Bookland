@@ -12,32 +12,35 @@ enum LibraryDestination {
 }
 
 enum LibrarySortOption: String, CaseIterable {
-    case newest = "New added"
-    case oldest = "Old added"
+    case newest = "Recently added"
+    case oldest = "Oldest added"
     case alphabetical = "A–Z"
     case mostRead = "Most read"
-    case leastRead = "Less read"
+    case leastRead = "Least read"
     case lastOpened = "Last opened"
 }
 
-enum AnnotationFilter: String, CaseIterable {
-    case all = "All"
-    case highlights = "Highlights"
-    case notes = "Notes"
-    case comments = "Comments"
+enum LibraryGrouping: String, CaseIterable {
+    case status = "By reading status"
+    case topic = "By topic"
+    case none = "One list"
 }
 
 struct ContentView: View {
     @EnvironmentObject private var store: LibraryStore
     @State private var selectedBookID: UUID?
     @State private var destination: LibraryDestination = .books
+    @State private var annotationBookID: UUID?
     @State private var showingImporter = false
     @State private var pendingURL: URL?
     @State private var showingTitlePrompt = false
+    @State private var showingLinkSheet = false
     @State private var showingTools = false
     @State private var showingAbout = false
     @State private var newTitle = ""
     @State private var importError: String?
+    @State private var toast: String?
+    @State private var dropTargeted = false
 
     private var supportedImportTypes: [UTType] {
         [.pdf, UTType(filenameExtension: "md") ?? .plainText]
@@ -47,38 +50,47 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            LibrarySidebar(selectedBookID: $selectedBookID, destination: $destination, showingImporter: $showingImporter, showingTools: $showingTools)
+            LibrarySidebar(selectedBookID: $selectedBookID, destination: $destination, annotationBookID: $annotationBookID, showingImporter: $showingImporter, showingLinkSheet: $showingLinkSheet, showingTools: $showingTools)
                 .environmentObject(store)
+                .navigationSplitViewColumnWidth(min: 290, ideal: 330, max: 440)
         } detail: {
             if destination == .annotations {
-                AnnotationLibraryView()
+                AnnotationLibraryView(bookID: $annotationBookID, onOpen: open)
                     .environmentObject(store)
             } else if let selectedBook {
-                ReaderWorkspace(book: selectedBook)
+                ReaderWorkspace(book: selectedBook, onShowAllNotes: { showNotes(for: selectedBook.id) })
+                    .id(selectedBook.id)
                     .environmentObject(store)
             } else {
-                EmptyLibraryView(showingImporter: $showingImporter)
+                EmptyLibraryView(showingImporter: $showingImporter, showingLinkSheet: $showingLinkSheet)
             }
         }
         .onChange(of: selectedBookID) { id in
             if id != nil { destination = .books }
         }
         .onReceive(NotificationCenter.default.publisher(for: .booklandImportRequested)) { _ in showingImporter = true }
+        .onReceive(NotificationCenter.default.publisher(for: .booklandLinkRequested)) { _ in showingLinkSheet = true }
+        .onReceive(NotificationCenter.default.publisher(for: .booklandNotesRequested)) { _ in showNotes(for: nil) }
         .onReceive(NotificationCenter.default.publisher(for: .booklandToolsRequested)) { _ in showingTools = true }
         .onReceive(NotificationCenter.default.publisher(for: .booklandAboutRequested)) { _ in showingAbout = true }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: supportedImportTypes, allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: supportedImportTypes, allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):
-                guard let url = urls.first else { return }
-                pendingURL = url
-                newTitle = url.deletingPathExtension().lastPathComponent
-                showingTitlePrompt = true
+                importFiles(urls)
             case .failure(let error):
                 importError = error.localizedDescription
             }
         }
         .sheet(isPresented: $showingTitlePrompt) {
             ImportTitleSheet(title: $newTitle, onCancel: { showingTitlePrompt = false }, onImport: importPendingPDF)
+        }
+        .sheet(isPresented: $showingLinkSheet) {
+            AddFromLinkSheet { book in
+                selectedBookID = book.id
+                destination = .books
+                toast = "Added “\(book.title)”"
+            }
+            .environmentObject(store)
         }
         .sheet(isPresented: $showingTools) {
             DocumentToolsView()
@@ -89,6 +101,69 @@ struct ContentView: View {
         .alert("Could not import file", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK") { importError = nil }
         } message: { Text(importError ?? "") }
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted, perform: handleDrop)
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                    .background(Color.accentColor.opacity(0.08))
+                    .overlay(Label("Drop PDF or Markdown files to add them", systemImage: "square.and.arrow.down").font(.title3.weight(.semibold)))
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .toast($toast)
+    }
+
+    private func showNotes(for bookID: UUID?) {
+        annotationBookID = bookID
+        selectedBookID = nil
+        destination = .annotations
+    }
+
+    /// Opens a book at the page of a passage.
+    private func open(_ book: LibraryBook, _ note: LibraryNote) {
+        store.updateLastPage(for: book.id, page: note.page)
+        destination = .books
+        selectedBookID = book.id
+    }
+
+    private func importFiles(_ urls: [URL]) {
+        if urls.count == 1, let url = urls.first {
+            pendingURL = url
+            newTitle = url.deletingPathExtension().lastPathComponent
+            showingTitlePrompt = true
+            return
+        }
+        let result = store.importBooks(from: urls)
+        if let first = result.added.first {
+            selectedBookID = first.id
+            destination = .books
+            toast = result.added.count == 1 ? "Added “\(first.title)”" : "Added \(result.added.count) books"
+        }
+        if !result.failures.isEmpty { importError = result.failures.joined(separator: "\n") }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else { return false }
+        Task {
+            var urls: [URL] = []
+            for provider in fileProviders {
+                let item = try? await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier)
+                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }
+                else if let url = item as? URL { urls.append(url) }
+            }
+            let supported = urls.filter { ["pdf", "md", "markdown"].contains($0.pathExtension.lowercased()) }
+            await MainActor.run {
+                if supported.isEmpty {
+                    importError = "BookLand supports PDF and Markdown (.md) files."
+                } else {
+                    importFiles(supported)
+                }
+            }
+        }
+        return true
     }
 
     private func importPendingPDF() {
@@ -99,6 +174,7 @@ struct ContentView: View {
             destination = .books
             showingTitlePrompt = false
             self.pendingURL = nil
+            toast = "Added “\(book.title)”"
         } catch {
             importError = error.localizedDescription
             showingTitlePrompt = false
@@ -106,16 +182,68 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Covers
+
+@MainActor
+final class CoverCache {
+    static let shared = CoverCache()
+    private let cache = NSCache<NSString, NSImage>()
+
+    func image(for url: URL) async -> NSImage? {
+        let key = url.lastPathComponent as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        let image: NSImage? = await Task.detached(priority: .utility) {
+            guard let page = PDFDocument(url: url)?.page(at: 0) else { return nil }
+            return page.thumbnail(of: CGSize(width: 120, height: 160), for: .cropBox)
+        }.value
+        if let image { cache.setObject(image, forKey: key) }
+        return image
+    }
+}
+
+struct CoverView: View {
+    @EnvironmentObject private var store: LibraryStore
+    let book: LibraryBook
+    var width: CGFloat = 38
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.12))
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: book.isMarkdown ? "text.document" : "doc.richtext")
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: width, height: width * 1.33)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .task(id: book.fileName) {
+            guard !book.isMarkdown else { return }
+            image = await CoverCache.shared.image(for: store.pdfURL(for: book))
+        }
+    }
+}
+
+// MARK: - Sidebar
+
 struct LibrarySidebar: View {
     @EnvironmentObject private var store: LibraryStore
     @Binding var selectedBookID: UUID?
     @Binding var destination: LibraryDestination
+    @Binding var annotationBookID: UUID?
     @Binding var showingImporter: Bool
+    @Binding var showingLinkSheet: Bool
     @Binding var showingTools: Bool
     @State private var searchText = ""
-    @State private var sortOption: LibrarySortOption = .newest
+    @AppStorage("bookland.sortOption") private var sortOption: LibrarySortOption = .newest
+    @AppStorage("bookland.grouping") private var grouping: LibraryGrouping = .status
+    @State private var showArchived = false
     @State private var selectedTag: String?
     @State private var editingBook: LibraryBook?
+    @State private var removingBook: LibraryBook?
 
     private var allTags: [String] {
         Array(Set(store.books.flatMap(\.tags))).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -124,6 +252,7 @@ struct LibrarySidebar: View {
     private var visibleBooks: [LibraryBook] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = store.books.filter { book in
+            guard book.isArchived == showArchived else { return false }
             let matchesSearch = query.isEmpty || book.title.localizedCaseInsensitiveContains(query) || book.tags.contains { $0.localizedCaseInsensitiveContains(query) }
             let matchesTag = selectedTag == nil || book.tags.contains(selectedTag!)
             return matchesSearch && matchesTag
@@ -138,26 +267,119 @@ struct LibrarySidebar: View {
         }
     }
 
+    private var continueBook: LibraryBook? {
+        guard searchText.isEmpty, selectedTag == nil, !showArchived, grouping != .none else { return nil }
+        return store.books.filter { $0.lastOpenedAt != nil && !$0.isMarkdown && !$0.isArchived }.max { ($0.lastOpenedAt ?? .distantPast) < ($1.lastOpenedAt ?? .distantPast) }
+    }
+
+    private var archivedCount: Int { store.books.filter(\.isArchived).count }
+
+    /// The visible books split into titled groups, so the library is not one long list.
+    private var sections: [(title: String, books: [LibraryBook])] {
+        let books = visibleBooks
+        switch grouping {
+        case .none:
+            return [(continueBook == nil ? "" : "All books", books)]
+        case .status:
+            let order: [LibraryBook.ReadingStatus] = [.reading, .notStarted, .finished]
+            return order.compactMap { status in
+                let group = books.filter { $0.status == status }
+                return group.isEmpty ? nil : (status.rawValue, group)
+            }
+        case .topic:
+            var result: [(String, [LibraryBook])] = []
+            for tag in allTags {
+                let group = books.filter { $0.tags.contains(tag) }
+                if !group.isEmpty { result.append((tag, group)) }
+            }
+            let untagged = books.filter { $0.tags.isEmpty }
+            if !untagged.isEmpty { result.append(("No topic", untagged)) }
+            return result
+        }
+    }
+
+    private func requestRemoval(of id: UUID?) {
+        guard let id, let book = store.books.first(where: { $0.id == id }) else { return }
+        removingBook = book
+    }
+
+    @ViewBuilder
+    private func row(for book: LibraryBook) -> some View {
+        BookRow(book: book)
+            .tag(book.id as UUID?)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) { removingBook = book } label: { Label("Remove", systemImage: "trash") }
+                Button { archive(book) } label: { Label(book.isArchived ? "Unarchive" : "Archive", systemImage: "archivebox") }
+                    .tint(.orange)
+            }
+            .contextMenu {
+                if !book.notes.isEmpty {
+                    Button("Show Highlights & Notes") {
+                        selectedBookID = nil
+                        annotationBookID = book.id
+                        destination = .annotations
+                    }
+                    Button("Copy Highlights & Notes") { Clipboard.copy(book.notesMarkdown()) }
+                }
+                Button("Edit Title & Topics") { editingBook = book }
+                Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([store.pdfURL(for: book)])
+                }
+                Divider()
+                Button(book.isArchived ? "Move Back to Library" : "Archive") { archive(book) }
+                Button("Remove from Library…", role: .destructive) { removingBook = book }
+            }
+    }
+
+    private func archive(_ book: LibraryBook) {
+        if selectedBookID == book.id, !book.isArchived { selectedBookID = nil }
+        store.setArchived(book.id, !book.isArchived)
+    }
+
+    private var noteTotal: Int { store.books.reduce(0) { $0 + $1.notes.count } }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Your library")
+            HStack(spacing: 8) {
+                Text("Library")
                     .font(.title2.weight(.semibold))
                 Spacer()
-                Button { showingImporter = true } label: { Image(systemName: "plus") }
-                    .buttonStyle(.borderedProminent)
-                    .help("Import a PDF or Markdown file")
+                Menu {
+                    Button { showingImporter = true } label: { Label("Import Files…", systemImage: "folder") }
+                    Button { showingLinkSheet = true } label: { Label("Add from a Link…", systemImage: "link") }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .padding(6)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 6))
+                .foregroundStyle(.white)
+                .help("Add a PDF or Markdown file, or download one from a link")
                 Button { showingTools = true } label: { Image(systemName: "wrench.and.screwdriver") }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderless)
                     .help("Open BookLand Tools")
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
+            .padding(.bottom, 8)
 
-            TextField("Search titles and topics", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search titles and topics", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
 
             HStack(spacing: 8) {
                 Menu {
@@ -171,6 +393,7 @@ struct LibrarySidebar: View {
                     }
                 } label: { Label(sortOption.rawValue, systemImage: "arrow.up.arrow.down") }
                 .menuStyle(.borderlessButton)
+                .fixedSize()
 
                 Menu {
                     Button("All topics") { selectedTag = nil }
@@ -185,6 +408,27 @@ struct LibrarySidebar: View {
                     }
                 } label: { Label(selectedTag ?? "Topics", systemImage: "tag") }
                 .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Menu {
+                    ForEach(LibraryGrouping.allCases, id: \.self) { option in
+                        Button { grouping = option } label: {
+                            HStack {
+                                Text(option.rawValue)
+                                if option == grouping { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button { showArchived.toggle() } label: {
+                        HStack {
+                            Text(showArchived ? "Back to my library" : "Show archived (\(archivedCount))")
+                            Image(systemName: showArchived ? "books.vertical" : "archivebox")
+                        }
+                    }
+                } label: { Label(showArchived ? "Archived" : "Group", systemImage: showArchived ? "archivebox" : "rectangle.3.group") }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 Spacer()
             }
             .padding(.horizontal, 14)
@@ -192,90 +436,107 @@ struct LibrarySidebar: View {
 
             Button {
                 selectedBookID = nil
+                annotationBookID = nil
                 destination = .annotations
             } label: {
-                HStack {
+                HStack(spacing: 10) {
                     Image(systemName: "highlighter")
+                        .frame(width: 20)
+                        .foregroundStyle(Color.accentColor)
                     Text("Notes & Highlights")
                     Spacer()
-                    let count = store.books.reduce(0) { $0 + $1.notes.count }
-                    if count > 0 { Text("\(count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                    if noteTotal > 0 { Text("\(noteTotal)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(destination == .annotations ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .background(destination == .annotations ? Color.accentColor.opacity(0.14) : Color.clear)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 6)
 
             Divider()
 
             if visibleBooks.isEmpty {
-                QuietEmptyState(title: store.books.isEmpty ? "No books yet" : "No matching books", systemImage: "books.vertical", description: store.books.isEmpty ? "Import a PDF or Markdown file to start your library." : "Try another title, topic, or sort option.")
+                QuietEmptyState(
+                    title: showArchived ? "Nothing archived" : (store.books.isEmpty ? "No books yet" : "No matching books"),
+                    systemImage: showArchived ? "archivebox" : "books.vertical",
+                    description: showArchived ? "Archive books you are done with to keep your library short. Their notes stay safe."
+                        : (store.books.isEmpty ? "Import a PDF or Markdown file, or drop files here." : "Try another title, topic, or sort option.")
+                )
             } else {
                 List(selection: $selectedBookID) {
-                    ForEach(visibleBooks) { book in
-                        BookRow(book: book)
-                            .tag(book.id as UUID?)
-                            .contextMenu {
-                                Button("Edit title & topics") { editingBook = book }
-                                Button("Reveal Library Folder") {
-                                    NSWorkspace.shared.open(store.libraryFolderURL)
-                                }
-                                Divider()
-                                Button("Remove from Library", role: .destructive) {
-                                    if selectedBookID == book.id { selectedBookID = nil }
-                                    store.removeBook(book)
-                                }
-                            }
+                    if let continueBook {
+                        Section("Continue reading") {
+                            row(for: continueBook)
+                        }
+                    }
+                    ForEach(sections, id: \.title) { section in
+                        Section(section.title) {
+                            ForEach(section.books) { book in row(for: book) }
+                        }
                     }
                 }
                 .listStyle(.sidebar)
+                .onDeleteCommand { requestRemoval(of: selectedBookID) }
             }
 
             Divider()
             HStack {
                 Image(systemName: "internaldrive")
-                Text("\(store.books.count) book\(store.books.count == 1 ? "" : "s") stored locally")
+                Text("\(store.books.count) book\(store.books.count == 1 ? "" : "s") stored on this Mac")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
             .padding(12)
         }
-        .frame(minWidth: 300)
         .sheet(item: $editingBook) { book in
             BookDetailsSheet(book: book)
                 .environmentObject(store)
+        }
+        .confirmationDialog(
+            "Remove “\(removingBook?.title ?? "")” from your library?",
+            isPresented: Binding(get: { removingBook != nil }, set: { if !$0 { removingBook = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove and delete its notes", role: .destructive) {
+                if let book = removingBook {
+                    if selectedBookID == book.id { selectedBookID = nil }
+                    store.removeBook(book)
+                }
+                removingBook = nil
+            }
+            Button("Cancel", role: .cancel) { removingBook = nil }
+        } message: {
+            Text("The copy inside BookLand and its highlights and notes are deleted. Your original file is not touched.")
         }
     }
 }
 
 struct BookRow: View {
     let book: LibraryBook
+    var compact = false
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "doc.richtext")
-                .font(.title3)
-                .foregroundStyle(Color.accentColor)
+            CoverView(book: book, width: compact ? 34 : 38)
             VStack(alignment: .leading, spacing: 3) {
                 Text(book.title)
+                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(2)
-                HStack(spacing: 5) {
-                    Text(book.readCount == 0 ? "Not read yet" : "Read activity: \(book.readCount)")
-                    if let lastOpenedAt = book.lastOpenedAt {
-                        Text("•")
-                        Text("Opened \(lastOpenedAt, format: .dateTime.month(.abbreviated).day().hour().minute())")
-                    }
-                    if let lastReadAt = book.lastReadAt {
-                        Text("•")
-                        Text("Read \(lastReadAt, format: .dateTime.month(.abbreviated).day().hour().minute())")
-                    }
+                if let progress = book.progress {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .controlSize(.small)
+                        .frame(maxWidth: 150)
                 }
+                Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if !book.tags.isEmpty {
+                    .lineLimit(1)
+                if !compact, !book.tags.isEmpty {
                     Text(book.tags.prefix(3).joined(separator: "  ·  "))
                         .font(.caption2)
                         .foregroundStyle(Color.accentColor)
@@ -283,7 +544,16 @@ struct BookRow: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
+    }
+
+    private var subtitle: String {
+        var parts: [String] = []
+        if book.isMarkdown { parts.append("Markdown") }
+        else if book.readCount == 0 && book.lastPage <= 1 { parts.append("Not started") }
+        else if let text = book.progressText { parts.append(text) }
+        if let summary = book.notesSummary { parts.append(summary) }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -323,71 +593,72 @@ struct BookDetailsSheet: View {
     }
 }
 
-struct AnnotationEntry: Identifiable {
-    let book: LibraryBook
-    let note: LibraryNote
-    var id: UUID { note.id }
-}
-
-struct AnnotationLibraryView: View {
+struct AddFromLinkSheet: View {
     @EnvironmentObject private var store: LibraryStore
-    @State private var filter: AnnotationFilter = .all
-    @State private var searchText = ""
-
-    private var entries: [AnnotationEntry] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return store.books.flatMap { book in book.notes.map { AnnotationEntry(book: book, note: $0) } }
-            .filter { entry in
-                let kindMatches: Bool
-                switch filter {
-                case .all: kindMatches = true
-                case .highlights: kindMatches = entry.note.kind == .highlight
-                case .notes: kindMatches = entry.note.kind == .note
-                case .comments: kindMatches = entry.note.kind == .comment
-                }
-                return kindMatches && (query.isEmpty || entry.book.title.localizedCaseInsensitiveContains(query) || entry.note.text.localizedCaseInsensitiveContains(query))
-            }
-            .sorted { $0.note.createdAt > $1.note.createdAt }
-    }
+    @Environment(\.dismiss) private var dismiss
+    let onAdded: (LibraryBook) -> Void
+    @State private var link = ""
+    @State private var working = false
+    @State private var errorText: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add a book from a link").font(.title2.weight(.semibold))
+            Text("Paste the web address of a PDF. BookLand downloads it and puts it in your library. Dropbox and Google Drive share links work too.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Notes & Highlights").font(.title2.weight(.semibold))
-            Text("Read your annotations without reopening the original files.").font(.caption).foregroundStyle(.secondary)
+                TextField("https://…", text: $link)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(working)
+                    .onSubmit(download)
+                Button("Paste") {
+                    if let text = NSPasteboard.general.string(forType: .string) { link = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                }
+                .disabled(working)
+            }
+            if let errorText {
+                Label(errorText, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                if working {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading…").foregroundStyle(.secondary)
                 }
                 Spacer()
-                Picker("Type", selection: $filter) {
-                    ForEach(AnnotationFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 320)
+                Button("Cancel") { dismiss() }
+                Button("Download", action: download)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(working || link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(20)
-            TextField("Search notes, highlights, and comments", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 12)
-            Divider()
-            if entries.isEmpty {
-                QuietEmptyState(title: "No annotations yet", systemImage: "note.text", description: "Highlights, notes, and comments will appear here.")
-            } else {
-                List(entries) { entry in
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            Text(entry.note.kind.label.uppercased()).font(.caption.weight(.bold)).foregroundStyle(entry.note.kind == .highlight ? Color.orange : Color.accentColor)
-                            Text(entry.book.title).font(.headline)
-                            Spacer()
-                            Text("Page \(entry.note.page)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                        Text(entry.note.text).font(.body).textSelection(.enabled)
-                        Text(entry.note.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 8)
-                }
-                .listStyle(.inset)
+        }
+        .padding(24)
+        .frame(width: 480)
+        .onAppear {
+            // Offer a link that is already on the clipboard.
+            if link.isEmpty, let text = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               text.lowercased().hasPrefix("http"), !text.contains(" "), !text.contains("\n") {
+                link = text
+            }
+        }
+    }
+
+    private func download() {
+        guard !working else { return }
+        working = true
+        errorText = nil
+        Task {
+            let result = await store.addBook(fromLink: link)
+            working = false
+            if let book = result.book {
+                dismiss()
+                onAdded(book)
+            } else if let message = result.error, !message.isEmpty {
+                errorText = message
             }
         }
     }
@@ -395,6 +666,7 @@ struct AnnotationLibraryView: View {
 
 struct EmptyLibraryView: View {
     @Binding var showingImporter: Bool
+    @Binding var showingLinkSheet: Bool
 
     var body: some View {
         VStack(spacing: 18) {
@@ -403,12 +675,23 @@ struct EmptyLibraryView: View {
                 .foregroundStyle(.tint)
             Text("A calmer way to read")
                 .font(.largeTitle.weight(.semibold))
-            Text("Keep your PDFs and Markdown files together, annotate them, and compare two PDF pages side by side.")
+            Text("Keep your PDFs and Markdown files together, highlight and annotate them, copy or share what you marked, and compare two PDFs side by side.")
                 .foregroundStyle(.secondary)
-            Button("Import your first file") { showingImporter = true }
-                .buttonStyle(.borderedProminent)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+            HStack {
+                Button { showingImporter = true } label: { Label("Import files…", systemImage: "folder") }
+                    .buttonStyle(.borderedProminent)
+                Button { showingLinkSheet = true } label: { Label("Add from a link…", systemImage: "link") }
+                    .buttonStyle(.bordered)
+            }
+            .controlSize(.large)
+            Text("You can also drag PDFs onto this window.")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
         }
         .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

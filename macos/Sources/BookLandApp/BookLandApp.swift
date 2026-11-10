@@ -11,7 +11,7 @@ struct BookLandApp: App {
         WindowGroup("BookLand") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 1080, minHeight: 720)
+                .frame(minWidth: 940, minHeight: 620)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -20,10 +20,18 @@ struct BookLandApp: App {
                 }
             }
             CommandGroup(after: .newItem) {
-                Button("Import PDF…") {
+                Button("Import Files…") {
                     NotificationCenter.default.post(name: .booklandImportRequested, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: [.command])
+                Button("Add from a Link…") {
+                    NotificationCenter.default.post(name: .booklandLinkRequested, object: nil)
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Notes & Highlights") {
+                    NotificationCenter.default.post(name: .booklandNotesRequested, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("BookLand Tools…") {
                     NotificationCenter.default.post(name: .booklandToolsRequested, object: nil)
                 }
@@ -35,6 +43,8 @@ struct BookLandApp: App {
 
 extension Notification.Name {
     static let booklandImportRequested = Notification.Name("booklandImportRequested")
+    static let booklandLinkRequested = Notification.Name("booklandLinkRequested")
+    static let booklandNotesRequested = Notification.Name("booklandNotesRequested")
     static let booklandToolsRequested = Notification.Name("booklandToolsRequested")
     static let booklandAboutRequested = Notification.Name("booklandAboutRequested")
 }

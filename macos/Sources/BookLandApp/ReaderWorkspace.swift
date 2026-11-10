@@ -60,33 +60,38 @@ enum HighlightColor: String, CaseIterable, Identifiable {
 struct ReaderWorkspace: View {
     @EnvironmentObject private var store: LibraryStore
     let book: LibraryBook
+    var onShowAllNotes: (() -> Void)?
     @State private var mode: ReaderMode = .read
     @State private var showingDetails = false
     @AppStorage("quietLibraryMainAppearance") private var mainAppearanceRaw = ReadingAppearance.system.rawValue
+    @AppStorage("bookland.showNotesPanel") private var showNotesPanel = true
+
+    private var currentBook: LibraryBook { store.books.first { $0.id == book.id } ?? book }
 
     private var appearance: ReadingAppearance {
         let rawValue = mode == .read ? mainAppearanceRaw : ReadingAppearance.system.rawValue
         return ReadingAppearance(rawValue: rawValue) ?? .system
     }
 
-    private var appearanceTitle: String {
-        "\(mode == .read ? "Main" : "Compare") · \(appearance.label)"
+    private var subtitle: String {
+        var parts: [String] = []
+        if currentBook.isMarkdown { parts.append("Markdown document") }
+        else if let text = currentBook.progressText { parts.append(text) }
+        if let summary = currentBook.notesSummary { parts.append(summary) }
+        if !currentBook.tags.isEmpty { parts.append(currentBook.tags.prefix(3).joined(separator: ", ")) }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(book.title).font(.title2.weight(.semibold))
-                    Text(book.sourcePath).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(currentBook.title).font(.title2.weight(.semibold)).lineLimit(1)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
                 Spacer()
-                Button {
-                    showingDetails = true
-                } label: {
-                    Label("Edit", systemImage: "pencil")
-                }
-                .buttonStyle(.bordered)
                 if mode == .read {
                     Menu {
                         ForEach(ReadingAppearance.allCases) { style in
@@ -100,26 +105,45 @@ struct ReaderWorkspace: View {
                             }
                         }
                     } label: {
-                        Label(appearanceTitle, systemImage: "paintpalette")
+                        Label(appearance.label, systemImage: "paintpalette")
                     }
                     .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Reading colours")
                 }
+                Button {
+                    showingDetails = true
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Edit title and topics")
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showNotesPanel.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.right")
+                        .foregroundStyle(showNotesPanel ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .disabled(mode == .compare)
+                .help(showNotesPanel ? "Hide notes and highlights" : "Show notes and highlights")
                 Picker("View", selection: $mode) {
                     ForEach(ReaderMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 180)
+                .labelsHidden()
+                .frame(width: 160)
                 .disabled(book.isMarkdown)
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
 
             Divider()
             if mode == .read {
                 if book.isMarkdown {
-                    MarkdownReader(book: book)
+                    MarkdownReader(book: book, showNotesPanel: showNotesPanel, onShowAllNotes: onShowAllNotes)
                 } else {
-                    SingleReader(book: book, appearance: appearance)
+                    SingleReader(book: book, appearance: appearance, showNotesPanel: showNotesPanel, onShowAllNotes: onShowAllNotes)
                 }
             } else {
                 CompareReader(primaryBook: book, onClose: { mode = .read })
@@ -128,7 +152,7 @@ struct ReaderWorkspace: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(appearance.colorScheme)
         .sheet(isPresented: $showingDetails) {
-            BookDetailsSheet(book: book)
+            BookDetailsSheet(book: currentBook)
                 .environmentObject(store)
         }
     }
@@ -137,6 +161,8 @@ struct ReaderWorkspace: View {
 struct MarkdownReader: View {
     @EnvironmentObject private var store: LibraryStore
     let book: LibraryBook
+    var showNotesPanel = true
+    var onShowAllNotes: (() -> Void)?
     @State private var showingNote = false
     @State private var noteText = ""
     @State private var noteKind: LibraryNoteKind = .note
@@ -184,13 +210,15 @@ struct MarkdownReader: View {
                 }
                 .background(Color(nsColor: .textBackgroundColor))
             }
-            Divider()
-            NotesPanel(book: book, onAdd: {
-                noteKind = .note
-                noteText = ""
-                showingNote = true
-            })
-            .frame(width: 300)
+            if showNotesPanel {
+                Divider()
+                NotesPanel(book: book, onAdd: {
+                    noteKind = .note
+                    noteText = ""
+                    showingNote = true
+                }, onShowAll: onShowAllNotes)
+                .frame(width: 300)
+            }
         }
         .sheet(isPresented: $showingNote) {
             NoteEditor(kind: $noteKind, text: $noteText, page: 1, onCancel: { showingNote = false }, onSave: saveNote)
@@ -214,6 +242,8 @@ struct SingleReader: View {
     @EnvironmentObject private var store: LibraryStore
     let book: LibraryBook
     let appearance: ReadingAppearance
+    var showNotesPanel = true
+    var onShowAllNotes: (() -> Void)?
     @StateObject private var controller = PDFReaderController()
     @StateObject private var searchController = PDFSearchController()
     @State private var showingNote = false
@@ -226,9 +256,11 @@ struct SingleReader: View {
         HStack(spacing: 0) {
             ReaderPanel(book: book, appearance: appearance, controller: controller, searchController: searchController, showPageSidebar: $showPageSidebar, onHighlight: highlight, onUndoHighlight: undoHighlight, onRemoveHighlight: removeHighlight, onComment: { noteKind = .comment; noteText = controller.selectedText; showingNote = true })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            NotesPanel(book: book, onAdd: { noteKind = .note; noteText = ""; showingNote = true })
-                .frame(width: 300)
+            if showNotesPanel {
+                Divider()
+                NotesPanel(book: book, onAdd: { noteKind = .note; noteText = ""; showingNote = true }, onJump: { controller.goToPage($0) }, onShowAll: onShowAllNotes)
+                    .frame(width: 300)
+            }
         }
         .sheet(isPresented: $showingNote) {
             NoteEditor(kind: $noteKind, text: $noteText, page: controller.currentPage, onCancel: { showingNote = false }, onSave: saveNote)
@@ -246,7 +278,7 @@ struct SingleReader: View {
     private func highlight(color: NSColor) -> Bool {
         guard controller.highlightSelection(color: color) else { return false }
         let text = controller.selectedText
-        let note = LibraryNote(page: controller.currentPage, text: text.isEmpty ? "Highlighted passage" : text, kind: .highlight)
+        let note = LibraryNote(page: controller.currentPage, text: text.isEmpty ? "Highlighted passage" : text, kind: .highlight, colorName: HighlightColor.named(for: color)?.rawValue)
         store.addNote(note, to: book.id)
         lastHighlightNote = note
         controller.selection = nil
@@ -309,12 +341,14 @@ struct ReaderPanel: View {
                 Button {
                     showPageSidebar.toggle()
                 } label: {
-                    Image(systemName: showPageSidebar ? "sidebar.left" : "sidebar.left")
+                    Image(systemName: "sidebar.left")
                 }
                 .help(showPageSidebar ? "Hide page thumbnails" : "Show page thumbnails")
                 ZoomControls(controller: controller)
-                Label("Highlight", systemImage: "highlighter")
-                    .font(.callout.weight(.medium))
+                Divider().frame(height: 18)
+                Image(systemName: "highlighter")
+                    .foregroundStyle(.secondary)
+                    .help("Select text, then pick a colour to highlight it")
                 ForEach(HighlightColor.allCases) { color in
                     Button {
                         selectedHighlightColor = color
@@ -338,8 +372,9 @@ struct ReaderPanel: View {
                 }
                 .disabled(!controller.canRemoveHighlightAtSelection)
                 .help("Remove highlight from selected text")
-                Button("Comment", action: onComment)
+                Button(action: onComment) { Label("Comment", systemImage: "text.bubble") }
                     .disabled(controller.selectedText.isEmpty)
+                    .help("Comment on the selected text")
             }
             .buttonStyle(.bordered)
             .padding(12)
@@ -423,12 +458,11 @@ struct PageHistoryControl: View {
                     }
                 }
             } label: {
-                Label(historyLabel, systemImage: "clock.arrow.circlepath")
-                    .lineLimit(1)
-                    .frame(maxWidth: 150)
+                Image(systemName: "clock.arrow.circlepath")
             }
             .menuStyle(.borderlessButton)
-            .help("Page history: \(controller.pageHistory.map(String.init).joined(separator: " → "))")
+            .fixedSize()
+            .help("Page history: \(historyLabel)")
         }
         .buttonStyle(.bordered)
     }
@@ -497,47 +531,6 @@ struct ZoomControls: View {
             }
         }
         .buttonStyle(.bordered)
-    }
-}
-
-struct NotesPanel: View {
-    @EnvironmentObject private var store: LibraryStore
-    let book: LibraryBook
-    let onAdd: () -> Void
-
-    var currentBook: LibraryBook { store.books.first(where: { $0.id == book.id }) ?? book }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Notes & marks").font(.headline)
-                Spacer()
-                Button(action: onAdd) { Image(systemName: "plus") }
-            }
-            .padding(14)
-            Divider()
-            if currentBook.notes.isEmpty {
-                QuietEmptyState(title: "Nothing here yet", systemImage: "note.text", description: "Select text to highlight or comment, or add a note.")
-            } else {
-                List {
-                    ForEach(currentBook.notes) { note in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(note.kind.label.uppercased()).font(.caption2.weight(.bold)).foregroundStyle(note.kind == .highlight ? Color.orange : Color.accentColor)
-                                Spacer()
-                                Text("p. \(note.page)").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Text(note.text).font(.callout).lineLimit(8)
-                        }
-                        .padding(.vertical, 5)
-                        .contextMenu {
-                            Button("Delete", role: .destructive) { store.deleteNote(note, from: book.id) }
-                        }
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
     }
 }
 
@@ -732,8 +725,8 @@ struct ComparisonPane: View {
                     Image(systemName: "sidebar.left")
                 }
                 .help(showPageSidebar ? "Hide page thumbnails" : "Show page thumbnails")
-                Label("Highlight", systemImage: "highlighter")
-                    .font(.callout.weight(.medium))
+                Image(systemName: "highlighter")
+                    .foregroundStyle(.secondary)
                 ForEach(HighlightColor.allCases) { color in
                     Button {
                         selectedHighlightColor = color
@@ -778,7 +771,7 @@ struct ComparisonPane: View {
     private func highlight(color: NSColor) -> Bool {
         guard let book, controller.highlightSelection(color: color) else { return false }
         let text = controller.selectedText
-        let note = LibraryNote(page: controller.currentPage, text: text.isEmpty ? "Highlighted passage" : text, kind: .highlight)
+        let note = LibraryNote(page: controller.currentPage, text: text.isEmpty ? "Highlighted passage" : text, kind: .highlight, colorName: HighlightColor.named(for: color)?.rawValue)
         store.addNote(note, to: book.id)
         lastHighlightNote = note
         controller.selection = nil
