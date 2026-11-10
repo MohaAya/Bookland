@@ -29,6 +29,7 @@ struct IOSLibraryHome: View {
     @State private var tagText = ""
     @State private var deleting: IOSLibraryBook?
     @State private var toast: String?
+    @State private var notesRoute: IOSBookNotesRoute?
 
     private var visibleBooks: [IOSLibraryBook] {
         let matches = searchText.isEmpty ? store.books : store.books.filter {
@@ -52,6 +53,7 @@ struct IOSLibraryHome: View {
             }
             .navigationTitle("Library")
             .navigationDestination(for: IOSReaderRoute.self) { IOSReaderLoader(route: $0) }
+            .navigationDestination(item: $notesRoute) { IOSBookNotesView(bookID: $0.bookID) }
             .searchable(text: $searchText, prompt: "Search titles and tags")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -150,9 +152,11 @@ struct IOSLibraryHome: View {
                         Button { startTagging(book) } label: { Label("Tags", systemImage: "tag") }.tint(.indigo)
                     }
                     .swipeActions(edge: .leading) {
+                        Button { notesRoute = IOSBookNotesRoute(bookID: book.id) } label: { Label("Highlights", systemImage: "highlighter") }.tint(.orange)
                         Button { startRenaming(book) } label: { Label("Rename", systemImage: "pencil") }.tint(IOSDesign.accent)
                     }
                     .contextMenu {
+                        Button { notesRoute = IOSBookNotesRoute(bookID: book.id) } label: { Label("Highlights & notes", systemImage: "highlighter") }
                         Button { startRenaming(book) } label: { Label("Rename", systemImage: "pencil") }
                         Button { startTagging(book) } label: { Label("Edit tags", systemImage: "tag") }
                         Divider()
@@ -236,8 +240,10 @@ struct IOSBookRow: View {
     }
 
     private var subtitle: String {
-        guard let count = book.pageCount, count > 0 else { return book.progressText }
-        return "\(book.progressText) · \(Int((book.progress * 100).rounded()))%"
+        var text = book.progressText
+        if let count = book.pageCount, count > 0 { text += " · \(Int((book.progress * 100).rounded()))%" }
+        if let notes = book.notesSummary { text += " · \(notes)" }
+        return text
     }
 }
 

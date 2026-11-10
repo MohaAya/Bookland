@@ -21,17 +21,22 @@ struct IOSLibraryNote: Identifiable, Hashable, Codable {
     /// For notes written on top of a selection: the passage the note refers to.
     var quote: String?
     var date: Date?
+    /// Highlight colour name ("Yellow", "Green", …) for highlights.
+    var colorName: String?
 
-    init(id: UUID = UUID(), page: Int, text: String, kind: String, quote: String? = nil, date: Date? = .now) {
+    init(id: UUID = UUID(), page: Int, text: String, kind: String, quote: String? = nil, date: Date? = .now, colorName: String? = nil) {
         self.id = id
         self.page = page
         self.text = text
         self.kind = kind
         self.quote = quote
         self.date = date
+        self.colorName = colorName
     }
 
     var isHighlight: Bool { kind == "Highlight" }
+    /// A passage saved without drawing a highlight on the page.
+    var isQuote: Bool { kind == "Quote" }
 }
 
 struct IOSLibraryBook: Identifiable, Hashable, Codable {
@@ -107,6 +112,42 @@ struct IOSLibraryBook: Identifiable, Hashable, Codable {
         try c.encode(dateAdded, forKey: .dateAdded)
         try c.encodeIfPresent(lastOpenedAt, forKey: .lastOpenedAt)
         try c.encodeIfPresent(pageCount, forKey: .pageCount)
+    }
+}
+
+extension IOSLibraryBook {
+    var highlightCount: Int { notes.filter { $0.isHighlight || $0.isQuote }.count }
+    var noteCount: Int { notes.filter { !$0.isHighlight && !$0.isQuote }.count }
+
+    /// "3 highlights · 1 note", or nil when there is nothing.
+    var notesSummary: String? {
+        var parts: [String] = []
+        if highlightCount > 0 { parts.append(highlightCount == 1 ? "1 highlight" : "\(highlightCount) highlights") }
+        if noteCount > 0 { parts.append(noteCount == 1 ? "1 note" : "\(noteCount) notes") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// One passage ready to paste: the text, then where it came from.
+    func citation(for note: IOSLibraryNote) -> String {
+        if note.isHighlight || note.isQuote { return "“\(note.text)” — \(title), p. \(note.page)" }
+        var out = note.text
+        if let quote = note.quote, !quote.isEmpty { out += "\n> \(quote)" }
+        return out + "\n— \(title), p. \(note.page)"
+    }
+
+    /// Several passages as Markdown, in page order, headed by the book title.
+    func notesMarkdown(_ chosen: [IOSLibraryNote]? = nil) -> String {
+        let list = (chosen ?? notes).sorted { $0.page < $1.page }
+        var out = "# \(title)\n"
+        for note in list {
+            if note.isHighlight || note.isQuote {
+                out += "\n- p. \(note.page) — “\(note.text)”"
+            } else {
+                out += "\n- p. \(note.page) — \(note.text)"
+                if let quote = note.quote, !quote.isEmpty { out += "\n  > \(quote)" }
+            }
+        }
+        return out + "\n"
     }
 }
 
@@ -344,22 +385,9 @@ final class IOSLibraryStore: ObservableObject {
 
     // MARK: Export
 
-    /// Every highlight and note as Markdown, grouped by book — for the Notes tab's share button.
+    /// Every highlight and note as Markdown, grouped by book.
     func notesMarkdown() -> String {
-        var out = "# BookLand notes\n"
-        for book in books where !book.notes.isEmpty {
-            out += "\n## \(book.title)\n"
-            for note in book.notes.sorted(by: { $0.page < $1.page }) {
-                if note.isHighlight {
-                    out += "\n- p. \(note.page) — “\(note.text)”"
-                } else {
-                    out += "\n- p. \(note.page) — \(note.text)"
-                    if let quote = note.quote, !quote.isEmpty { out += "\n  > \(quote)" }
-                }
-            }
-            out += "\n"
-        }
-        return out
+        books.filter { !$0.notes.isEmpty }.map { $0.notesMarkdown() }.joined(separator: "\n")
     }
 
     var storageBytes: Int64 {

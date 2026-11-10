@@ -5,92 +5,238 @@ import SwiftUI
 
 // MARK: - Notes
 
+struct IOSBookNotesRoute: Hashable {
+    let bookID: UUID
+}
+
+/// One row per book that has highlights or notes; opens that book's own list.
 struct IOSNotesView: View {
     @EnvironmentObject private var store: IOSLibraryStore
     @State private var searchText = ""
 
     private var booksWithNotes: [IOSLibraryBook] {
         store.books.filter { book in
-            !filteredNotes(book).isEmpty
+            guard !book.notes.isEmpty else { return false }
+            guard !searchText.isEmpty else { return true }
+            return book.title.localizedCaseInsensitiveContains(searchText)
+                || book.notes.contains { $0.text.localizedCaseInsensitiveContains(searchText) || ($0.quote ?? "").localizedCaseInsensitiveContains(searchText) }
         }
-    }
-
-    private func filteredNotes(_ book: IOSLibraryBook) -> [IOSLibraryNote] {
-        let sorted = book.notes.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
-        guard !searchText.isEmpty else { return sorted }
-        return sorted.filter { $0.text.localizedCaseInsensitiveContains(searchText) || ($0.quote ?? "").localizedCaseInsensitiveContains(searchText) }
     }
 
     var body: some View {
         NavigationStack {
             List {
                 ForEach(booksWithNotes) { book in
-                    Section(book.title) {
-                        ForEach(filteredNotes(book)) { note in
-                            NavigationLink(value: IOSReaderRoute(bookID: book.id, page: note.page)) {
-                                IOSNoteRow(note: note)
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) { store.deleteNote(note, from: book) } label: { Label("Delete", systemImage: "trash") }
-                            }
-                            .contextMenu {
-                                Button { UIPasteboard.general.string = note.text } label: { Label("Copy", systemImage: "doc.on.doc") }
-                                Button(role: .destructive) { store.deleteNote(note, from: book) } label: { Label("Delete", systemImage: "trash") }
+                    NavigationLink(value: IOSBookNotesRoute(bookID: book.id)) {
+                        HStack(spacing: 14) {
+                            IOSCoverView(book: book, width: 40, height: 54)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(book.title).font(.headline).lineLimit(2)
+                                if let summary = book.notesSummary {
+                                    Text(summary).font(.subheadline).foregroundStyle(.secondary)
+                                }
                             }
                         }
+                        .padding(.vertical, 3)
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
             .overlay {
                 if store.books.allSatisfy({ $0.notes.isEmpty }) {
-                    ContentUnavailableView("No notes yet", systemImage: "highlighter", description: Text("While reading, select text and tap the highlighter to save a highlight or write a note. They collect here."))
+                    ContentUnavailableView("No highlights yet", systemImage: "highlighter", description: Text("While reading, select text and choose Highlight, Save selection or Add note. Each book keeps its own list here, ready to copy or share."))
                 } else if booksWithNotes.isEmpty {
                     ContentUnavailableView.search(text: searchText)
                 }
             }
             .navigationTitle("Notes")
-            .navigationDestination(for: IOSReaderRoute.self) { IOSReaderLoader(route: $0) }
-            .searchable(text: $searchText, prompt: "Search notes")
+            .navigationDestination(for: IOSBookNotesRoute.self) { IOSBookNotesView(bookID: $0.bookID) }
+            .searchable(text: $searchText, prompt: "Search notes and books")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     ShareLink(item: store.notesMarkdown(), subject: Text("BookLand notes")) {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .disabled(store.books.allSatisfy { $0.notes.isEmpty })
-                    .accessibilityLabel("Share all notes")
+                    .accessibilityLabel("Share the notes of every book")
                 }
             }
         }
     }
 }
 
-struct IOSNoteRow: View {
-    let note: IOSLibraryNote
+/// Every highlight, saved passage and note of one book, with copy and share on each.
+struct IOSBookNotesView: View {
+    @EnvironmentObject private var store: IOSLibraryStore
+    @Environment(\.dismiss) private var dismiss
+    let bookID: UUID
+    /// Set when shown inside the reader: jump within the open book instead of pushing a new reader.
+    var onOpen: ((Int) -> Void)? = nil
+
+    private enum Filter: String, CaseIterable, Identifiable {
+        case all = "All", highlights = "Highlights", notes = "Notes"
+        var id: String { rawValue }
+    }
+
+    @State private var filter: Filter = .all
+    @State private var sortByPage = true
+    @State private var searchText = ""
+    @State private var toast: String?
+    @State private var openRoute: IOSReaderRoute?
+
+    private var book: IOSLibraryBook? { store.book(bookID) }
+
+    private func visibleNotes(_ book: IOSLibraryBook) -> [IOSLibraryNote] {
+        var list = book.notes
+        switch filter {
+        case .all: break
+        case .highlights: list = list.filter { $0.isHighlight || $0.isQuote }
+        case .notes: list = list.filter { !$0.isHighlight && !$0.isQuote }
+        }
+        if !searchText.isEmpty {
+            list = list.filter { $0.text.localizedCaseInsensitiveContains(searchText) || ($0.quote ?? "").localizedCaseInsensitiveContains(searchText) }
+        }
+        return sortByPage
+            ? list.sorted { ($0.page, $0.date ?? .distantPast) < ($1.page, $1.date ?? .distantPast) }
+            : list.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: note.isHighlight ? "highlighter" : "note.text")
-                .foregroundStyle(note.isHighlight ? Color.orange : IOSDesign.accent)
-                .frame(width: 22)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(note.text)
-                    .font(.body)
-                    .lineLimit(5)
-                if let quote = note.quote, !quote.isEmpty {
-                    Text(quote)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .padding(.leading, 8)
-                        .overlay(alignment: .leading) { Rectangle().fill(.secondary.opacity(0.4)).frame(width: 2) }
-                }
-                Text("Page \(note.page) · \(note.kind)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        Group {
+            if let book {
+                content(book)
+            } else {
+                ContentUnavailableView("Book not found", systemImage: "questionmark.folder")
             }
         }
-        .padding(.vertical, 3)
+        .navigationTitle(book?.title ?? "Notes")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $openRoute) { IOSReaderLoader(route: $0) }
+        .iosToast($toast)
+    }
+
+    @ViewBuilder
+    private func content(_ book: IOSLibraryBook) -> some View {
+        let notes = visibleNotes(book)
+        List {
+            Section {
+                Picker("Show", selection: $filter) {
+                    ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            }
+            Section(book.notesSummary ?? "Nothing saved yet") {
+                ForEach(notes) { note in
+                    row(note, in: book)
+                }
+                .onDelete { offsets in
+                    offsets.map { notes[$0] }.forEach { store.deleteNote($0, from: book) }
+                }
+            }
+        }
+        .overlay {
+            if book.notes.isEmpty {
+                ContentUnavailableView("No highlights yet", systemImage: "highlighter", description: Text("Select text while reading, then choose Highlight, Save selection or Add note."))
+            } else if notes.isEmpty {
+                ContentUnavailableView.search(text: searchText.isEmpty ? filter.rawValue : searchText)
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search this book’s notes")
+        .toolbar {
+            if onOpen != nil {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        UIPasteboard.general.string = book.notesMarkdown(notes)
+                        toast = notes.count == 1 ? "Copied 1 item" : "Copied \(notes.count) items"
+                    } label: { Label("Copy \(filter == .all && searchText.isEmpty ? "all" : "shown")", systemImage: "doc.on.doc") }
+                    ShareLink(item: book.notesMarkdown(notes), subject: Text(book.title)) {
+                        Label("Share \(filter == .all && searchText.isEmpty ? "all" : "shown")…", systemImage: "square.and.arrow.up")
+                    }
+                    Divider()
+                    Picker("Order", selection: $sortByPage) {
+                        Label("By page", systemImage: "number").tag(true)
+                        Label("Newest first", systemImage: "clock").tag(false)
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .disabled(book.notes.isEmpty)
+                .accessibilityLabel("Copy, share and sort")
+            }
+        }
+    }
+
+    private func row(_ note: IOSLibraryNote, in book: IOSLibraryBook) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button { open(note, in: book) } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    marker(for: note)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(note.text)
+                            .font(.body)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(8)
+                        if let quote = note.quote, !quote.isEmpty {
+                            Text(quote)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                                .padding(.leading, 8)
+                                .overlay(alignment: .leading) { Rectangle().fill(.secondary.opacity(0.4)).frame(width: 2) }
+                        }
+                        Text("Page \(note.page) · \(note.kind)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.primary)
+            .accessibilityHint("Opens the book at page \(note.page)")
+
+            VStack(spacing: 2) {
+                Button {
+                    UIPasteboard.general.string = book.citation(for: note)
+                    toast = "Copied with page number"
+                } label: {
+                    Image(systemName: "doc.on.doc").frame(width: 40, height: 36)
+                }
+                .accessibilityLabel("Copy")
+                ShareLink(item: book.citation(for: note)) {
+                    Image(systemName: "square.and.arrow.up").frame(width: 40, height: 36)
+                }
+                .accessibilityLabel("Share")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(IOSDesign.accent)
+        }
+        .padding(.vertical, 2)
+        .contextMenu {
+            Button { open(note, in: book) } label: { Label("Open page \(note.page)", systemImage: "book") }
+            Button { UIPasteboard.general.string = note.text; toast = "Copied text only" } label: { Label("Copy text only", systemImage: "text.quote") }
+            Button(role: .destructive) { store.deleteNote(note, from: book) } label: { Label("Delete", systemImage: "trash") }
+        }
+    }
+
+    @ViewBuilder
+    private func marker(for note: IOSLibraryNote) -> some View {
+        if note.isHighlight {
+            let color = IOSHighlightColor(rawValue: note.colorName ?? "") ?? .yellow
+            RoundedRectangle(cornerRadius: 2).fill(Color(uiColor: color.uiColor)).frame(width: 4).padding(.vertical, 2)
+        } else if note.isQuote {
+            Image(systemName: "quote.opening").foregroundStyle(IOSDesign.accent).frame(width: 18).padding(.top, 3)
+        } else {
+            Image(systemName: "note.text").foregroundStyle(IOSDesign.accent).frame(width: 18).padding(.top, 3)
+        }
+    }
+
+    private func open(_ note: IOSLibraryNote, in book: IOSLibraryBook) {
+        if let onOpen { onOpen(note.page) } else { openRoute = IOSReaderRoute(bookID: book.id, page: note.page) }
     }
 }
 

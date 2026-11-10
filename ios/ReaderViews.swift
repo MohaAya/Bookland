@@ -35,6 +35,8 @@ final class IOSReaderController: ObservableObject {
     var onTap: (() -> Void)?
     /// Opens the note editor for the current selection (reader screen only).
     var onAddNote: (() -> Void)?
+    /// Opens this book's highlights and notes list (reader screen only).
+    var onShowNotes: (() -> Void)?
     /// Highlights are also written to the book's note list so they appear in the Notes tab.
     var noteSink: ((IOSLibraryNote) -> Void)?
     var noteRemoveSink: ((UUID) -> Void)?
@@ -162,13 +164,27 @@ final class IOSReaderController: ObservableObject {
             return
         }
         let pageNumber = firstPage.flatMap { pdfView.document?.index(for: $0) }.map { $0 + 1 } ?? page
-        let note = IOSLibraryNote(page: pageNumber, text: text, kind: "Highlight")
+        let note = IOSLibraryNote(page: pageNumber, text: text, kind: "Highlight", colorName: color.rawValue)
         lastHighlight = (created, note.id)
         canUndoHighlight = true
         noteSink?(note)
         pdfView.clearSelection()
         selectedText = ""
         toast = saveDocument() ? "Highlight saved" : "Highlighted, but couldn't save to the file."
+    }
+
+    /// Keeps the selected passage in the book's notes without drawing on the page.
+    func saveSelection() {
+        guard let selection = pdfView?.currentSelection,
+              let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            toast = "Select some text first."
+            return
+        }
+        let pageNumber = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) }.map { $0 + 1 } ?? page
+        noteSink?(IOSLibraryNote(page: pageNumber, text: text, kind: "Quote"))
+        pdfView?.clearSelection()
+        selectedText = ""
+        toast = "Saved to this book’s notes"
     }
 
     func undoHighlight() {
@@ -208,6 +224,7 @@ final class IOSReaderController: ObservableObject {
 final class IOSPDFKitView: PDFView {
     var onHighlight: ((IOSHighlightColor) -> Void)?
     var onAddNote: (() -> Void)?
+    var onSaveSelection: (() -> Void)?
 
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
@@ -217,6 +234,7 @@ final class IOSPDFKitView: PDFView {
                 self?.onHighlight?(color)
             }
         }
+        items.append(UIAction(title: "Save selection", image: UIImage(systemName: "quote.opening")) { [weak self] _ in self?.onSaveSelection?() })
         items.append(UIAction(title: "Add note…", image: UIImage(systemName: "note.text.badge.plus")) { [weak self] _ in self?.onAddNote?() })
         builder.insertChild(UIMenu(title: "Highlight", image: UIImage(systemName: "highlighter"), children: items), atStartOfMenu: .standardEdit)
     }
@@ -236,6 +254,7 @@ struct IOSPDFView: UIViewRepresentable {
         let controller = self.controller
         view.onHighlight = { [weak controller] color in controller?.highlight(color) }
         view.onAddNote = { [weak controller] in controller?.onAddNote?() }
+        view.onSaveSelection = { [weak controller] in controller?.saveSelection() }
         configure(view, resetToFit: true)
         view.isUserInteractionEnabled = true
         view.isInMarkupMode = false
@@ -456,6 +475,7 @@ struct IOSReaderView: View {
     @State private var showingHistory = false
     @State private var showingPageBrowser = false
     @State private var showingNoteEditor = false
+    @State private var showingBookNotes = false
     @State private var noteQuote = ""
     @State private var sliderValue = 1.0
     @State private var scrubbing = false
@@ -504,6 +524,7 @@ struct IOSReaderView: View {
             store.markOpened(book)
             sliderValue = Double(initialPage)
             controller.onTap = { chromeVisible.toggle() }
+            controller.onShowNotes = { showingBookNotes = true }
             controller.onAddNote = {
                 noteQuote = controller.selectedText
                 showingNoteEditor = true
@@ -530,6 +551,15 @@ struct IOSReaderView: View {
         }
         .sheet(isPresented: $showingHistory) { IOSPageHistorySheet(controller: controller) }
         .sheet(isPresented: $showingPageBrowser) { IOSPageBrowserSheet(controller: controller) }
+        .sheet(isPresented: $showingBookNotes) {
+            NavigationStack {
+                IOSBookNotesView(bookID: book.id, onOpen: { page in
+                    showingBookNotes = false
+                    controller.goToPage(page)
+                })
+            }
+            .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showingNoteEditor) {
             IOSNoteEditorSheet(page: controller.page, quote: noteQuote) { text in
                 store.addNote(IOSLibraryNote(page: controller.page, text: text, kind: "Note", quote: noteQuote.isEmpty ? nil : noteQuote), to: book)
@@ -577,6 +607,7 @@ struct IOSReaderView: View {
                 Button { controller.fitToScreen() } label: { Label("Fit to screen", systemImage: "arrow.up.left.and.arrow.down.right") }
                 Divider()
                 Button { showingHistory = true } label: { Label("Reading history", systemImage: "clock.arrow.circlepath") }
+                Button { showingBookNotes = true } label: { Label(book.notesSummary.map { "Highlights & notes · \($0)" } ?? "Highlights & notes", systemImage: "highlighter") }
             } label: {
                 Image(systemName: "ellipsis.circle").frame(width: 40, height: 44)
             }
@@ -674,8 +705,12 @@ struct IOSReaderToolbar: View {
                     ForEach(IOSHighlightColor.allCases) { color in
                         Button { controller.highlight(color) } label: { Label("Highlight \(color.rawValue.lowercased())", systemImage: "highlighter") }
                     }
+                    Button { controller.saveSelection() } label: { Label("Save selection to notes", systemImage: "quote.opening") }
                     if let onAddNote = controller.onAddNote {
                         Button(action: onAddNote) { Label("Add note…", systemImage: "note.text.badge.plus") }
+                    }
+                    if let onShowNotes = controller.onShowNotes {
+                        Button(action: onShowNotes) { Label("View highlights & notes", systemImage: "list.bullet.rectangle") }
                     }
                     Divider()
                     Button { controller.undoHighlight() } label: { Label("Undo last highlight", systemImage: "arrow.uturn.backward") }
