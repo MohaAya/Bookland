@@ -27,13 +27,24 @@ PDF import paths:
 
 The document declaration in `Info.plist` registers BookLand as a PDF viewer. The app receives the incoming URL with SwiftUI’s `onOpenURL`, stages the PDF immediately, asks for its title, copies it into its own Documents folder, and persists the library metadata locally. Telegram will not appear as a folder inside the Files picker; the Telegram-to-BookLand route is Share/Open in.
 
-Reader controls:
+## Keeping BookLand installed (the 7-day problem)
 
-- Choose **Page turn** for smooth horizontal book-style swipes or **Vertical scroll** for continuous reading. The choice is independent for each reader and compare pane.
-- Use the compact Previous/Next page buttons, or tap the page counter to jump to a specific page.
-- In full screen, use the persistent back arrow to return to the library, the grid button to browse page thumbnails or the PDF index, and the full-screen menus to change theme or reading mode.
-- Use the magnifying-glass menu for Zoom in, Zoom out, and Fit to screen. Pinch-to-zoom remains available in the PDF surface.
-- Use the clock button for the separate reading-history trail, including jumps back to earlier pages.
-- Use the expand button for distraction-free full-screen reading. Rotate the iPhone to landscape; the reader and Compare layout adapt to the available orientation.
-- Touch and hold selectable PDF text to use the native iPhone selection menu, including Copy, Look Up, Search, and related actions when the PDF contains a text layer.
-- Paper themes now tint the rendered PDF surface itself: Milky, Sepia, Blue Grey, Sage Study, Sketchbook, Midnight Navy, Graphite Night, and Amber Night. Sketchbook adds a restrained hand-drawn paper grain; the dark themes use low-glare dark paper with readable light text.
+An app installed from Xcode with a free Apple ID gets a provisioning profile that is valid for **7 days**; after that iPhone refuses to open it. No setting or code inside the app can extend that, and the only free fixes are to re-sign it before it runs out:
+
+- **In the app:** the Library shows a warning during the last three days, and Settings → *Keeping BookLand installed* shows the exact expiry time and can send a reminder 3 days and 1 day before.
+- **One command:** `ios/tools/refresh-iphone.sh --force` rebuilds with a fresh profile and installs over the existing app on your paired iPhone in about 20 seconds. Without `--force` it only refreshes when the last refresh is 4+ days old.
+- **Automatic (optional):** `ios/tools/install-refresh-agent.sh` runs that script every 6 hours in the background while you are logged in to your Mac, so a refresh happens by itself whenever the iPhone is reachable on the same Wi-Fi. `--remove` turns it off. It needs this folder to stay on the Mac, the iPhone paired once with a cable, and *Connect via network* ticked in Xcode → Window → Devices and Simulators.
+- **Never delete the app first.** Installing over it keeps the library, highlights and notes; deleting it removes them. The library stores only PDF file names, and PDFs found in the app's folder without a library entry are re-added on launch.
+- A $99/year Apple Developer Program account would extend the profile to a year. It is not needed for any of the above.
+
+If iPhone says the app cannot be opened because its developer is not trusted: Settings → General → VPN & Device Management → your Apple Development entry → Trust.
+
+## Reading
+
+- The reader hides the tab bar and shows one header: back, title, reading mode, paper theme and a More menu (zoom, fit, reading history). **Tap the page** to hide or show all controls.
+- The bottom bar has a page slider, previous/next, the page counter (tap to jump), pages and index, search, and the highlighter.
+- Select text and choose **Highlight** (four colours) or **Add note…** from the selection menu, or use the highlighter button. Highlights are drawn one rectangle per line, saved into the PDF, and listed in the Notes tab; tapping a note opens the book on that page. The share button exports every highlight and note as Markdown.
+- **Page turn** gives horizontal book-style swipes and **Vertical scroll** gives continuous reading. Paper theme, reading mode and "keep screen on" are remembered across books (Settings).
+- Library: books show their first page, progress and tags; swipe or long-press for Rename, Tags and Delete (with confirmation); sort by recently read, title or date added; import several PDFs at once, or tap + → Add from a link to download a PDF from a web address (direct links, Dropbox and Google Drive share links) straight into the library.
+- Compare: two panes with their own book, page and controls; the swap button exchanges them. In portrait they stack, in landscape they sit side by side.
+- Paper themes tint the rendered PDF itself: Milky, Sepia, Blue Grey, Sage Study, Sketchbook, Midnight Navy, Graphite Night and Amber Night; System follows light/dark mode.

@@ -46,7 +46,7 @@ cd macos
 
 ## iOS
 
-Open `ios/BookLand-iOS.xcodeproj` in Xcode, select a simulator or connected iPhone, configure your Apple development team under Signing & Capabilities, and run the project.
+Open `ios/BookLand-iOS.xcodeproj` in Xcode, select a simulator or connected iPhone, configure your Apple development team under Signing & Capabilities, and run the project. Apps installed with a free Apple ID stop opening after 7 days; see [ios/README.md](ios/README.md#keeping-bookland-installed-the-7-day-problem) for the in-app countdown and the one-command refresh script.
 
 ## License and attribution
 
