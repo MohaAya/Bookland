@@ -7,6 +7,9 @@ import PDFKit
 
 enum BookLandDocumentToolError: LocalizedError {
     case cannotOpenPDF
+    case cannotOpenNamed(String)
+    case passwordProtected(String)
+    case destinationIsSource(String)
     case invalidPage
     case invalidPageRange
     case noSelectableText
@@ -17,6 +20,12 @@ enum BookLandDocumentToolError: LocalizedError {
         switch self {
         case .cannotOpenPDF:
             return "BookLand could not open the selected PDF."
+        case .cannotOpenNamed(let name):
+            return "BookLand could not open “\(name)”. It may be damaged or not a PDF."
+        case .passwordProtected(let name):
+            return "“\(name)” is password protected. Unlock it first, then add it again."
+        case .destinationIsSource(let name):
+            return "The output would overwrite “\(name)”, which is one of the files being combined. Choose a different name."
         case .invalidPage:
             return "That page number is outside the PDF."
         case .invalidPageRange:
@@ -71,18 +80,41 @@ enum BookLandDocumentTools {
         try write(output, to: destinationURL)
     }
 
-    static func combinePDFs(urls: [URL], to destinationURL: URL) throws {
+    /// Combines PDFs in the order given. Pages are copied as-is (no re-rendering),
+    /// so text stays selectable and vector artwork and images keep their original quality.
+    static func combinePDFs(urls: [URL], addBookmarks: Bool = true, to destinationURL: URL) throws {
         guard !urls.isEmpty else { throw BookLandDocumentToolError.cannotOpenPDF }
+        let destination = destinationURL.standardizedFileURL
+        if let clash = urls.first(where: { $0.standardizedFileURL == destination }) {
+            throw BookLandDocumentToolError.destinationIsSource(clash.lastPathComponent)
+        }
+
         let output = PDFDocument()
+        let outlineRoot = PDFOutline()
         for url in urls {
-            guard let document = PDFDocument(url: url) else { throw BookLandDocumentToolError.cannotOpenPDF }
+            let name = url.lastPathComponent
+            guard let document = PDFDocument(url: url) else {
+                throw BookLandDocumentToolError.cannotOpenNamed(name)
+            }
+            if document.isLocked, !document.unlock(withPassword: "") {
+                throw BookLandDocumentToolError.passwordProtected(name)
+            }
+            let firstIndex = output.pageCount
             for pageIndex in 0..<document.pageCount {
                 guard let page = document.page(at: pageIndex),
                       let copiedPage = page.copy() as? PDFPage else { continue }
                 output.insert(copiedPage, at: output.pageCount)
             }
+            if addBookmarks, output.pageCount > firstIndex, let firstPage = output.page(at: firstIndex) {
+                let bookmark = PDFOutline()
+                bookmark.label = url.deletingPathExtension().lastPathComponent
+                let top = firstPage.bounds(for: .cropBox).maxY
+                bookmark.destination = PDFDestination(page: firstPage, at: NSPoint(x: 0, y: top))
+                outlineRoot.insertChild(bookmark, at: outlineRoot.numberOfChildren)
+            }
         }
         guard output.pageCount > 0 else { throw BookLandDocumentToolError.cannotOpenPDF }
+        if addBookmarks, outlineRoot.numberOfChildren > 0 { output.outlineRoot = outlineRoot }
         try write(output, to: destinationURL)
     }
 
@@ -136,10 +168,20 @@ enum BookLandDocumentTools {
     }
 
     private static func write(_ document: PDFDocument, to url: URL) throws {
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+        // Write beside the destination first so a failed save never destroys an existing file.
+        let temporary = url.deletingLastPathComponent()
+            .appendingPathComponent(".BookLand-\(UUID().uuidString).pdf")
+        guard document.write(to: temporary) else { throw BookLandDocumentToolError.cannotWriteOutput(url.path) }
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+            } else {
+                try FileManager.default.moveItem(at: temporary, to: url)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw BookLandDocumentToolError.cannotWriteOutput(url.path)
         }
-        guard document.write(to: url) else { throw BookLandDocumentToolError.cannotWriteOutput(url.path) }
     }
 
     private static func normalizedText(_ value: String) -> String {

@@ -37,8 +37,8 @@ cat > "${CONTENTS}/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>BookLand</string>
 	<key>CFBundleIconFile</key><string>AppIcon.icns</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.1</string>
-	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>0.2</string>
+	<key>CFBundleVersion</key><string>2</string>
 	<key>NSHumanReadableCopyright</key><string>© Mohammad Ayati, August 2026. BookLand logo artwork and logo-specific visual identity credited to Lida Samadi (GitHub: @lidasama; Instagram: @lidasamadi.design). Source code is licensed under the MIT License.</string>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
 	<key>NSHighResolutionCapable</key><true/>

@@ -11,7 +11,7 @@ struct DocumentToolsView: View {
     @State private var sourcePageCount = 0
     @State private var pageNumberText = "1"
     @State private var splitRangeText = "1"
-    @State private var combineURLs: [URL] = []
+    @State private var showCombine = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var isWorking = false
@@ -38,7 +38,7 @@ struct DocumentToolsView: View {
                             if let sourceURL {
                                 Text(sourceURL.lastPathComponent)
                                     .font(.callout.weight(.medium))
-                                Text(sourcePageCount > 0 ? "(sourcePageCount) pages" : "PDF selected")
+                                Text(sourcePageCount > 0 ? "\(sourcePageCount) pages" : "PDF selected")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             } else {
@@ -55,7 +55,7 @@ struct DocumentToolsView: View {
                             TextField("1", text: $pageNumberText)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 64)
-                            Text(sourcePageCount > 0 ? "of (sourcePageCount)" : "")
+                            Text(sourcePageCount > 0 ? "of \(sourcePageCount)" : "")
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Save JPG…", action: exportPageAsJPG)
@@ -74,37 +74,13 @@ struct DocumentToolsView: View {
                         }
                     }
 
-                    toolCard(icon: "arrow.triangle.merge", title: "Combine PDF files", description: "Select several PDFs and combine them into one document in the order shown below.") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if combineURLs.isEmpty {
-                                Text("No PDFs selected yet.")
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(Array(combineURLs.enumerated()), id: \.element) { index, url in
-                                    HStack(spacing: 8) {
-                                        Text("\(index + 1).")
-                                            .font(.caption.monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                        Text(url.lastPathComponent)
-                                            .lineLimit(1)
-                                        Spacer()
-                                        Button {
-                                            combineURLs.removeAll { $0 == url }
-                                        } label: {
-                                            Image(systemName: "minus.circle")
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Remove PDF")
-                                    }
-                                }
-                            }
-                            HStack {
-                                Button("Add PDFs…", action: chooseCombinePDFs)
-                                Spacer()
-                                Button("Save combined PDF…", action: combinePDFs)
-                                    .disabled(combineURLs.isEmpty || isWorking)
-                            }
+                    toolCard(icon: "arrow.triangle.merge", title: "Combine PDF files", description: "Merge as many PDFs as you like into one document. Drag to reorder, with no loss of quality.") {
+                        HStack {
+                            Text("Add files together, drop them in, and reorder before saving.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Combine PDFs…") { showCombine = true }
                         }
                     }
 
@@ -136,6 +112,7 @@ struct DocumentToolsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showCombine) { CombinePDFsView() }
             .alert("BookLand Tools", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK") { errorMessage = nil }
             } message: {
@@ -175,16 +152,6 @@ struct DocumentToolsView: View {
         }
     }
 
-    private func chooseCombinePDFs() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.pdf]
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK else { return }
-        combineURLs = panel.urls
-        clearStatus()
-    }
-
     private func saveURL(defaultName: String, contentType: UTType) -> URL? {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [contentType]
@@ -214,19 +181,10 @@ struct DocumentToolsView: View {
             guard let destination = saveURL(defaultName: name, contentType: .pdf) else { return }
             perform {
                 try BookLandDocumentTools.splitPDF(from: sourceURL, pages: pages, to: destination)
-                return "Saved (pages.count) selected page\(pages.count == 1 ? "" : "s") as \(destination.lastPathComponent)."
+                return "Saved \(pages.count) selected page\(pages.count == 1 ? "" : "s") as \(destination.lastPathComponent)."
             }
         } catch {
             showError(error)
-        }
-    }
-
-    private func combinePDFs() {
-        guard !combineURLs.isEmpty else { return }
-        guard let destination = saveURL(defaultName: "BookLand-combined.pdf", contentType: .pdf) else { return }
-        perform {
-            try BookLandDocumentTools.combinePDFs(urls: combineURLs, to: destination)
-            return "Combined (combineURLs.count) PDFs into \(destination.lastPathComponent)."
         }
     }
 
