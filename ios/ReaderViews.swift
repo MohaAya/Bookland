@@ -23,7 +23,12 @@ final class IOSReaderController: ObservableObject {
     weak var pdfView: PDFView?
     @Published var page = 1
     @Published var pageCount = 1
-    @Published var selectedText = ""
+    /// The text currently selected in the PDF, read on demand. It is deliberately not @Published:
+    /// selection changes fire continuously while a handle is dragged, and publishing them made
+    /// SwiftUI rebuild the whole reader screen each time.
+    var selectedText: String {
+        pdfView?.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
     @Published var documentError: String?
     @Published var documentReady = false
     @Published var history: [Int] = [1]
@@ -46,6 +51,7 @@ final class IOSReaderController: ObservableObject {
 
     var canGoToPreviousPage: Bool { page > 1 }
     var canGoToNextPage: Bool { page < pageCount }
+    /// Checks the page's annotations, so call it only when needed (never from a view body).
     var canRemoveHighlight: Bool {
         guard let selection = pdfView?.currentSelection else { return false }
         return selection.pages.contains { page in
@@ -169,8 +175,8 @@ final class IOSReaderController: ObservableObject {
         canUndoHighlight = true
         noteSink?(note)
         pdfView.clearSelection()
-        selectedText = ""
-        toast = saveDocument() ? "Highlight saved" : "Highlighted, but couldn't save to the file."
+        scheduleSave()
+        toast = "Highlight added"
     }
 
     /// Keeps the selected passage in the book's notes without drawing on the page.
@@ -183,7 +189,6 @@ final class IOSReaderController: ObservableObject {
         let pageNumber = selection.pages.first.flatMap { pdfView?.document?.index(for: $0) }.map { $0 + 1 } ?? page
         noteSink?(IOSLibraryNote(page: pageNumber, text: text, kind: "Quote"))
         pdfView?.clearSelection()
-        selectedText = ""
         toast = "Saved to this book’s notes"
     }
 
@@ -193,30 +198,68 @@ final class IOSReaderController: ObservableObject {
         noteRemoveSink?(last.noteID)
         lastHighlight = nil
         canUndoHighlight = false
-        toast = saveDocument() ? "Highlight removed" : "Removed, but couldn't save to the file."
+        scheduleSave()
+        toast = "Highlight removed"
     }
 
     func removeHighlight() {
-        guard let selection = pdfView?.currentSelection else { return }
+        guard let selection = pdfView?.currentSelection else {
+            toast = "Select the highlighted text first."
+            return
+        }
         let selectedString = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var firstPage = page
+        var removed = 0
         for page in selection.pages {
             let bounds = selection.bounds(for: page)
-            page.annotations.filter { $0.type == "Highlight" && !$0.bounds.intersection(bounds).isEmpty }
-                .forEach { page.removeAnnotation($0) }
+            let hits = page.annotations.filter { $0.type == "Highlight" && !$0.bounds.intersection(bounds).isEmpty }
+            hits.forEach { page.removeAnnotation($0) }
+            removed += hits.count
             if let index = pdfView?.document?.index(for: page) { firstPage = index + 1 }
+        }
+        guard removed > 0 else {
+            toast = "There is no highlight on the selected text."
+            return
         }
         highlightNotesRemoveSink?(firstPage, selectedString)
         lastHighlight = nil
         canUndoHighlight = false
         pdfView?.clearSelection()
-        selectedText = ""
-        toast = saveDocument() ? "Highlight removed" : "Removed, but couldn't save to the file."
+        scheduleSave()
+        toast = "Highlight removed"
     }
 
-    private func saveDocument() -> Bool {
-        guard let document = pdfView?.document, let url = document.documentURL else { return false }
-        return document.write(to: url)
+    // MARK: Saving
+
+    // Writing the PDF rewrites the whole file, which can take a second on a large book. Highlights
+    // appear on the page straight away; the file is written once the reader has been idle for a
+    // moment, never while a word is selected, and always when the book is closed or the app leaves
+    // the screen.
+    private var needsSave = false
+    private var saveWork: DispatchWorkItem?
+
+    private func scheduleSave() {
+        needsSave = true
+        saveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.pdfView?.currentSelection != nil { self.scheduleSave(); return }
+            self.flushSave()
+        }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    /// Writes pending highlight changes to the PDF now.
+    func flushSave() {
+        saveWork?.cancel()
+        saveWork = nil
+        guard needsSave else { return }
+        needsSave = false
+        guard let document = pdfView?.document, let url = document.documentURL, document.write(to: url) else {
+            toast = "Couldn't save highlights to the PDF file."
+            return
+        }
     }
 }
 
@@ -242,7 +285,9 @@ final class IOSPDFKitView: PDFView {
 
 struct IOSPDFView: UIViewRepresentable {
     let url: URL
-    @ObservedObject var controller: IOSReaderController
+    // Not @ObservedObject: the PDF view is driven by the controller's methods, and observing it
+    // re-ran updateUIView (and a PDFView relayout) on every published change.
+    let controller: IOSReaderController
     let paperColor: Color
     let readingMode: IOSReadingMode
     var initialPage: Int = 1
@@ -284,15 +329,18 @@ struct IOSPDFView: UIViewRepresentable {
         if view.displayDirection != (paged ? .horizontal : .vertical) { view.displayDirection = paged ? .horizontal : .vertical }
         if view.displayMode != (paged ? .singlePage : .singlePageContinuous) { view.displayMode = paged ? .singlePage : .singlePageContinuous }
         if view.displaysPageBreaks != !paged { view.displaysPageBreaks = !paged }
-        view.pageBreakMargins = UIEdgeInsets(top: 14, left: 0, bottom: 14, right: 0)
+        // Only touch properties that changed: each assignment makes PDFView lay out and redraw.
+        let margins = UIEdgeInsets(top: 14, left: 0, bottom: 14, right: 0)
+        if view.pageBreakMargins != margins { view.pageBreakMargins = margins }
         if view.isUsingPageViewController != paged {
             view.usePageViewController(paged, withViewOptions: [
                 UIPageViewController.OptionsKey.interPageSpacing: 18
             ])
         }
-        view.backgroundColor = UIColor(paperColor)
-        view.pageShadowsEnabled = false
-        view.accessibilityValue = readingMode.rawValue
+        let background = UIColor(paperColor)
+        if view.backgroundColor != background { view.backgroundColor = background }
+        if view.pageShadowsEnabled { view.pageShadowsEnabled = false }
+        if view.accessibilityValue != readingMode.rawValue { view.accessibilityValue = readingMode.rawValue }
         if resetToFit || modeChanged {
             DispatchQueue.main.async { [weak view] in
                 guard let view else { return }
@@ -357,11 +405,8 @@ struct IOSPDFView: UIViewRepresentable {
                     if number != self.controller.page { self.controller.goToPage(number) }
                 }
             })
-            observers.append(NotificationCenter.default.addObserver(forName: Notification.Name.PDFViewSelectionChanged, object: view, queue: .main) { [weak self, weak view] _ in
-                Task { @MainActor in
-                    self?.controller.selectedText = view?.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                }
-            })
+            // No selection observer on purpose: nothing needs to run while the user selects text.
+            // The selected text is read from the PDF view only when a note or highlight asks for it.
 
             // A single tap shows or hides the reading controls. It waits for a possible
             // double tap so PDFView's double-tap zoom doesn't also toggle them.
@@ -392,7 +437,7 @@ struct IOSPDFView: UIViewRepresentable {
 /// paper colour over it; dark themes invert the page and lift the black to the paper colour.
 struct IOSStyledPDF: View {
     let url: URL
-    @ObservedObject var controller: IOSReaderController
+    let controller: IOSReaderController
     let paper: Color
     let isDark: Bool
     let isSketchy: Bool
@@ -465,6 +510,7 @@ struct IOSReaderView: View {
     @EnvironmentObject private var store: IOSLibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.scenePhase) private var scenePhase
     let book: IOSLibraryBook
     let startPage: Int?
     @StateObject private var controller = IOSReaderController()
@@ -541,7 +587,13 @@ struct IOSReaderView: View {
             }
             UIApplication.shared.isIdleTimerDisabled = keepAwake
         }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onDisappear {
+            controller.flushSave()
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { controller.flushSave() }
+        }
         .onChange(of: controller.page) { _, page in
             store.updatePage(page, for: book)
             if !scrubbing { sliderValue = Double(page) }
@@ -716,7 +768,6 @@ struct IOSReaderToolbar: View {
                     Button { controller.undoHighlight() } label: { Label("Undo last highlight", systemImage: "arrow.uturn.backward") }
                         .disabled(!controller.canUndoHighlight)
                     Button(role: .destructive) { controller.removeHighlight() } label: { Label("Remove highlight here", systemImage: "eraser") }
-                        .disabled(!controller.canRemoveHighlight)
                 } label: {
                     IOSChipLabel(systemName: "highlighter", tint: IOSDesign.accent)
                 }

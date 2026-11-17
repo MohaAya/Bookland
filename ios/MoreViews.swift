@@ -369,6 +369,7 @@ struct IOSComparePane: View {
             }
         }
         .background(paper)
+        .onDisappear { controller.flushSave() }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
         .sheet(isPresented: $showingPageBrowser) { IOSPageBrowserSheet(controller: controller) }
