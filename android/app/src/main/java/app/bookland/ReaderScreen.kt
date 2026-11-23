@@ -627,6 +627,8 @@ private fun ReaderContent(
         val viewW = with(density) { maxWidth.toPx() }
         val viewH = with(density) { maxHeight.toPx() }
         val maxBitmapW = 2200f
+        val boxMaxW = maxWidth
+        val boxMaxH = maxHeight
 
         @Composable
         fun Page(i: Int, widthPx: Float, heightPx: Float) {
@@ -662,7 +664,7 @@ private fun ReaderContent(
                     val hs = rememberScrollState()
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Box(
-                            Modifier.widthIn(max = maxWidth).heightIn(max = maxHeight)
+                            Modifier.widthIn(max = boxMaxW).heightIn(max = boxMaxH)
                                 .then(if (zoom > 1f) Modifier.verticalScroll(vs).horizontalScroll(hs) else Modifier),
                         ) { Page(i, w, h) }
                     }
