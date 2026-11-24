@@ -1,6 +1,6 @@
 # BookLand for Android
 
-Native Kotlin + Jetpack Compose reader. Version 0.2 (full feature set).
+Native Kotlin + Jetpack Compose reader. Version 0.3 (full feature set + pinch zoom + in-app Google Translate).
 
 - Library: covers, progress, tags, sort (recently read / title / date added), search titles and tags, Continue reading, rename, tags, delete
 - Add PDFs: import several at once, Open with / Share from Files, Telegram, Mail or a browser, and **Add from a link** (direct links, Dropbox and Google Drive share links)

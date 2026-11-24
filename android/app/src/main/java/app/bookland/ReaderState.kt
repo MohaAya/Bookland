@@ -47,6 +47,7 @@ class ReaderState(
     var sheet by mutableStateOf<Sheet?>(null)
     var noteDraft by mutableStateOf<NoteDraft?>(null)
     var editingNoteId by mutableStateOf<String?>(null)
+    var translating by mutableStateOf<String?>(null)
 
     val history = mutableStateListOf(page)
     var historyIndex by mutableIntStateOf(0)

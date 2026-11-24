@@ -73,6 +73,14 @@ fun SettingsTab(books: List<Book>, store: Store) {
                 Text(m.label, color = MaterialTheme.colorScheme.onBackground)
             }
         }
+        var langMenu by remember { mutableStateOf(false) }
+        androidx.compose.foundation.layout.Box {
+            Row(Modifier.fillMaxWidth().clickable { langMenu = true }.padding(horizontal = 20.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Translate to", color = MaterialTheme.colorScheme.onBackground)
+                Text(languageName(store.translateLang), color = MaterialTheme.colorScheme.primary)
+            }
+            LanguageMenu(store, langMenu) { langMenu = false }
+        }
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Keep screen on while reading", Modifier.weight(1f), color = MaterialTheme.colorScheme.onBackground)
             Switch(checked = store.keepAwake, onCheckedChange = { store.keepAwake = it })

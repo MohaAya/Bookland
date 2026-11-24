@@ -58,6 +58,15 @@ class Store(private val context: Context) {
         get() = sortState
         set(v) { sortState = v; prefs.edit().putString("sort", v.name).apply() }
 
+    private var langState by mutableStateOf(
+        prefs.getString("translateLang", null) ?: java.util.Locale.getDefault().language.let { l ->
+            if (TranslateLanguages.any { it.first == l }) l else "en"
+        }
+    )
+    var translateLang: String
+        get() = langState
+        set(v) { langState = v; prefs.edit().putString("translateLang", v).apply() }
+
     // ---- library ----
     fun loadBooks(): List<Book> {
         if (!indexFile.exists()) return emptyList()

@@ -11,7 +11,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -135,7 +139,27 @@ fun ReaderPane(state: ReaderState, store: Store, modifier: Modifier = Modifier, 
 private fun ReaderContent(state: ReaderState, session: PdfSession, theme: PaperTheme, mode: ReadingMode, onTapEmpty: (Float) -> Unit) {
     val count = session.pageCount
     val pageMatches by remember(state) { derivedStateOf { state.matches.groupBy { it.page } } }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        Modifier.fillMaxSize().pointerInput(state) {
+            // Two-finger pinch zooms; single-finger drags still go to page turning and scrolling.
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                var zoomed = false
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.changes.count { it.pressed } >= 2) {
+                        val z = event.calculateZoom()
+                        if (z != 1f) {
+                            state.zoom = (state.zoom * z).coerceIn(1f, 4f)
+                            zoomed = true
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                } while (event.changes.any { it.pressed })
+                if (zoomed && state.zoom < 1.08f) state.zoom = 1f
+            }
+        },
+    ) {
         val density = LocalDensity.current
         val viewW = with(density) { maxWidth.toPx() }
         val viewH = with(density) { maxHeight.toPx() }
@@ -237,8 +261,12 @@ private fun PageView(
     onTapEmpty: (Float) -> Unit,
 ) {
     val density = LocalDensity.current
-    val bitmapW = min(widthPx, 2200f).roundToInt().coerceAtLeast(1)
+    // Render in 128px steps so pinch-zooming doesn't ask for a new bitmap on every frame.
+    val bitmapW = (kotlin.math.ceil(min(widthPx, 2600f) / 128f).toInt() * 128).coerceAtLeast(128)
     val bmp by produceState<Bitmap?>(session.cached(index, bitmapW), session, index, bitmapW) {
+        val hit = session.cached(index, bitmapW)
+        if (hit != null) { value = hit; return@produceState }
+        if (value != null) delay(180) // keep showing the old bitmap while the fingers are still moving
         value = session.render(index, bitmapW)
     }
     val pageText by produceState<PageText?>(null, session, index) { value = session.text(index) }
@@ -390,7 +418,7 @@ fun SelectionBar(state: ReaderState, modifier: Modifier = Modifier) {
                 TextButton(onClick = { state.startNoteFromSelection() }) { Text("Add note") }
                 TextButton(onClick = { state.saveSelectionAsQuote() }) { Text("Save") }
                 TextButton(onClick = { copyText(ctx, text); Toast.makeText(ctx, "Copied", Toast.LENGTH_SHORT).show() }) { Text("Copy") }
-                TextButton(onClick = { translateText(ctx, text) }) { Text("Translate") }
+                TextButton(onClick = { state.translating = text }) { Text("Translate") }
             }
         }
     }
@@ -443,6 +471,8 @@ fun ReaderSheets(state: ReaderState, store: Store) {
         }
         null -> {}
     }
+
+    state.translating?.let { t -> TranslateDialog(t, store) { state.translating = null } }
 
     state.noteDraft?.let { draft ->
         var text by remember(draft) { mutableStateOf("") }
