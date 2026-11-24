@@ -65,7 +65,13 @@ fun TranslateDialog(text: String, store: Store, onDismiss: () -> Unit) {
     val query = text.trim().take(1500)
     val lang = store.translateLang
     var menu by remember { mutableStateOf(false) }
-    val url = "https://translate.google.com/m?sl=auto&tl=$lang&hl=en&q=" + URLEncoder.encode(query, "UTF-8")
+    var engine by remember { mutableStateOf(0) } // 0 = Google, 1 = Bing
+    val enc = URLEncoder.encode(query, "UTF-8")
+    val url = if (engine == 0)
+        "https://translate.google.com/?sl=auto&tl=$lang&text=$enc&op=translate"
+    else
+        "https://www.bing.com/translator?from=auto&to=${if (lang == "zh-CN") "zh-Hans" else lang}&text=$enc"
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
@@ -84,6 +90,15 @@ fun TranslateDialog(text: String, store: Store, onDismiss: () -> Unit) {
                     }
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
                 }
+                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.FilterChip(engine == 0, { engine = 0 }, { Text("Google") })
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(horizontal = 4.dp))
+                    androidx.compose.material3.FilterChip(engine == 1, { engine = 1 }, { Text("Bing") })
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    }) { Text("Open in browser") }
+                }
                 Text(
                     query, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
@@ -94,6 +109,8 @@ fun TranslateDialog(text: String, store: Store, onDismiss: () -> Unit) {
                         WebView(ctx).apply {
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
+                            // Look like regular mobile Chrome instead of an embedded "wv" browser.
+                            settings.userAgentString = settings.userAgentString.replace("; wv", "")
                             webViewClient = WebViewClient()
                         }
                     },
