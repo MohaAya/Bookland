@@ -8,6 +8,7 @@ import android.os.ParcelFileDescriptor
 import android.util.LruCache
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
 import kotlinx.coroutines.Dispatchers
@@ -96,6 +97,8 @@ class PageText(val chars: List<PChar>, val wPts: Float, val hPts: Float) {
         return sb.toString().replace(Regex("\\s+"), " ").trim()
     }
 }
+
+data class OutlineRow(val title: String, val page: Int?, val depth: Int)
 
 data class SearchHit(val page: Int, val rects: List<Rf>, val snippet: String)
 
@@ -190,7 +193,7 @@ class PdfSession private constructor(
             val (w, h) = sizes.getOrNull(page) ?: (612f to 792f)
             val pt = try {
                 PdfBoxInit.ensure(appContext)
-                val d = doc ?: PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).also { doc = it }
+                val d = loadDoc()
                 val c = Collector(w, h)
                 c.setStartPage(page + 1)
                 c.setEndPage(page + 1)
@@ -201,6 +204,35 @@ class PdfSession private constructor(
             }
             textCache[page] = pt
             pt
+        }
+    }
+
+    private fun loadDoc(): PDDocument {
+        PdfBoxInit.ensure(appContext)
+        return doc ?: PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).also { doc = it }
+    }
+
+    /** The PDF's own table of contents (empty when it has none). */
+    suspend fun outline(): List<OutlineRow> = withContext(Dispatchers.IO) {
+        textLock.withLock {
+            try {
+                val d = loadDoc()
+                val root = d.documentCatalog.documentOutline ?: return@withLock emptyList()
+                val out = ArrayList<OutlineRow>()
+                walkOutline(d, root, 0, out)
+                out
+            } catch (e: Throwable) {
+                emptyList()
+            }
+        }
+    }
+
+    private fun walkOutline(d: PDDocument, node: PDOutlineNode, depth: Int, out: MutableList<OutlineRow>) {
+        for (item in node.children()) {
+            if (out.size > 3000 || depth > 8) return
+            val page = runCatching { item.findDestinationPage(d)?.let { d.pages.indexOf(it) } }.getOrNull()?.takeIf { it >= 0 }
+            out.add(OutlineRow(item.title ?: "Untitled", page, depth))
+            walkOutline(d, item, depth + 1, out)
         }
     }
 
